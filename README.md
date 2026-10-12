@@ -55,3 +55,34 @@ python -m pytest -q
 ## Next
 
 Add approved FAQs or PDFs, retrieval quality evaluation, monitoring and a controlled deployment. Keep medical and booking claims source-grounded.
+
+## Implementation and validation notes
+
+Python 3.12 is the tested runtime. For CPU-only Linux development, install the CPU wheel first to avoid unnecessary GPU dependencies:
+
+```sh
+python -m pip install 'torch==2.8.0+cpu' --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -r requirements.txt
+```
+
+`rxdx/core.py` validates sources, chunks pages and checks generated citation IDs against retrieved passages. `rxdx/crawl.py` enforces HTTPS source allowlists, bounds downloads, checks robots rules and rejects disallowed redirects before following them. `rxdx/search.py` uses normalized sentence-transformer vectors and cosine similarity. The Streamlit UI requires explicit source-terms confirmation before indexing.
+
+Tests use mocked website responses, a deterministic fake embedding model and a mocked generation provider. They test application behavior without representing live RxDx facts. Citation checks verify source identity and formatting; they do not prove every generated claim is entailed by a source. The keyword medical guard is an additional precaution, not a comprehensive clinical-safety classifier.
+
+The index and conversation live in Streamlit server-session memory; restarting loses them. Refresh only after reviewing source terms and robots permissions. Only the official homepage is initially configured; add verified clinic/service URLs to `sources.txt` for useful coverage. No website content is bundled.
+
+### Hosting
+
+Streamlit requires a persistent Python process and WebSockets. Deploy this version to a Python/Streamlit-capable host such as Streamlit Community Cloud or a container host, with startup command `streamlit run app.py --server.address 0.0.0.0 --server.port 8501 --server.headless true`. Configure API credentials in host secret settings, never in Git. Public use additionally needs access controls, rate limits, privacy review and live retrieval/answer evaluation.
+
+Vercel does not natively host this Streamlit server. A Vercel frontend would need a separately hosted Python backend and an API integration; that architecture is not included here.
+
+### Project 2
+
+An AI recruitment assistant has been proposed, but its scope and implementation are pending. It should provide job-related evidence and human review, avoiding automated hiring decisions or protected-characteristic inferences.
+
+In Codex cloud settings, `OPENAI_` variable names are reserved. Use the supported `RXDX_API_KEY` secret binding to `api.openai.com`; the app accepts it before falling back to `OPENAI_API_KEY`. Never paste keys into chat. For another provider, configure its HTTPS endpoint and securely bind a credential to that provider's host.
+
+### Current validation
+
+The implemented suite passes 28 tests, including Streamlit startup/chat behavior, source display, crawler rules and citation guards. The running Streamlit server responds successfully to its health request. Live RxDx homepage extraction succeeded after a successful robots check. Full real-model semantic indexing is not yet validated: the Hugging Face weights CDN is currently blocked by the cloud network policy. Live AI generation is also untested because an API key is absent. No public deployment has been completed.

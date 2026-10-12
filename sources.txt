@@ -1,0 +1,2 @@
+# Add verified official public pages, one HTTPS URL per line.
+https://rxdx.in/
