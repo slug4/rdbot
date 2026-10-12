@@ -1,0 +1,8 @@
+streamlit>=1.38,<2
+requests>=2.32,<3
+beautifulsoup4>=4.12,<5
+sentence-transformers>=3.0,<6
+numpy>=1.26,<3
+openai>=1.50,<3
+python-dotenv>=1.0,<2
+pytest>=8,<10
