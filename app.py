@@ -101,6 +101,11 @@ def query():
     except APIStatusError as exc:
         # Only known error categories are exposed; never provider bodies or credentials.
         code = getattr(exc, 'code', None)
+        body = getattr(exc, 'body', None)
+        if isinstance(body, dict):
+            detail = body.get('error', body)
+            if isinstance(detail, dict):
+                code = code or detail.get('code') or detail.get('type')
         if code == 'insufficient_quota':
             return jsonify(error='Your AI provider account has no available API credits. Add API billing or credits, then try again.', error_code='insufficient_quota'), 503
         if exc.status_code == 401:

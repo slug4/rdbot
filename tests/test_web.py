@@ -87,13 +87,14 @@ def test_index_cached_only_after_success(monkeypatch):
     web._cache.clear()
 
 
-def test_quota_error_is_actionable_without_leaking_credentials(client,monkeypatch):
+@pytest.mark.parametrize('body',[{'code':'insufficient_quota'},{'error':{'code':'insufficient_quota'}},{'error':{'type':'insufficient_quota'}}])
+def test_quota_error_is_actionable_without_leaking_credentials(client,monkeypatch,body):
     import httpx
     from openai import RateLimitError
     request=httpx.Request('POST','https://api.openai.com/v1/embeddings')
     response=httpx.Response(429,request=request)
     def fail():
-        raise RateLimitError('confidential provider details',response=response,body={'code':'insufficient_quota'})
+        raise RateLimitError('confidential provider details',response=response,body=body)
     monkeypatch.setattr(web,'get_index',fail)
     result=client.post('/api/answer',json={'question':'clinic services'})
     assert result.status_code==503
