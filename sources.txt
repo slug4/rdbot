@@ -1,4 +1,7 @@
-https://rxdx.in/
+# Approved public sources for doctor, branch, contact, test and home-care questions.
+https://rxdx.in/find-a-doctor/
 https://rxdx.in/Centres/
-https://rxdx.in/about-us/
-https://rxdx.in/corporate-health-checks/
+https://rxdx.in/contact-us/
+https://rxdx.in/lab-and-radiology/
+https://rxdx.in/home-healthcare/
+https://rxdx.in/health-check-packages/

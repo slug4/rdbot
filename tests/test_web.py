@@ -12,7 +12,7 @@ def test_vercel_entrypoint_and_home(client):
     assert web.app is not None
     response=client.get('/')
     assert response.status_code==200
-    assert b'Public knowledge assistant' in response.data
+    assert b'Simple clinic answers' in response.data
     assert client.get('/static/app.js').status_code==200
     assert client.get('/health').json['status']=='ok'
 
@@ -31,21 +31,26 @@ def test_medical_refusal_never_calls_retrieval(client,monkeypatch):
     assert result['mode']=='safety' and result['sources']==[]
 
 
+class FakeModel:
+    def encode(self,texts):
+        return [[1.,0.] if 'contact' in text.lower() else [0.,1.] for text in texts]
+
+
 def index_fixture():
     chunks=[Chunk('Synthetic clinic contact telephone information.','https://rxdx.in/')]
-    return Retriever(chunks,web.KeywordEmbeddings(chunks)),[], 'keyword'
+    return Retriever(chunks,FakeModel()),[], 'semantic'
 
 
-def test_source_grounded_excerpt_mode(client,monkeypatch):
-    monkeypatch.delenv('OPENAI_API_KEY',raising=False)
-    monkeypatch.delenv('RXDX_API_KEY',raising=False)
+def test_source_grounded_generated_answer(client,monkeypatch):
+    monkeypatch.setenv('RXDX_API_KEY','test-placeholder')
+    monkeypatch.setattr(web,'answer',lambda question,hits:'Synthetic clinic contact answer [Source 1].')
     monkeypatch.setattr(web,'get_index',index_fixture)
     response=client.post('/api/answer',json={'question':'clinic contact telephone'})
     assert response.status_code==200
     result=response.json
-    assert result['mode']=='keyword'
+    assert result['mode']=='semantic'
     assert result['sources'][0]['url']=='https://rxdx.in/'
-    assert 'No generation API configured' in result['answer']
+    assert '[Source 1]' in result['answer']
 
 
 def test_unrelated_question_abstains(client,monkeypatch):
@@ -73,8 +78,8 @@ def test_generated_bad_citations_fail_closed(client,monkeypatch):
 
 
 def test_index_cached_only_after_success(monkeypatch):
-    monkeypatch.delenv('OPENAI_API_KEY',raising=False)
-    monkeypatch.delenv('RXDX_API_KEY',raising=False)
+    monkeypatch.setenv('RXDX_API_KEY','test-placeholder')
+    monkeypatch.setattr(web,'HostedEmbeddings',lambda key:FakeModel())
     web._cache.clear()
     calls=[]
     def load(*_,**__):

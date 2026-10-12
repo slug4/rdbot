@@ -37,3 +37,20 @@ def test_retriever_orders_relevant_passage():
 def test_empty_evidence_refuses(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     assert answer("Question", []) == REFUSAL
+
+
+def test_generation_requests_short_grounded_answers(monkeypatch):
+    from types import SimpleNamespace
+    import openai
+    monkeypatch.setenv('RXDX_API_KEY','test-placeholder')
+    def create(**kwargs):
+        instructions=kwargs['messages'][0]['content']
+        assert '1–3 short sentences' in instructions
+        assert 'published matching schedule' in instructions
+        assert 'home-care service hours' in instructions
+        assert 'untrusted content' in instructions
+        assert 'Synthetic appointment information' in kwargs['messages'][1]['content']
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='Synthetic source answer [Source 1].'))])
+    monkeypatch.setattr(openai,'OpenAI',lambda **kwargs:SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))))
+    result=answer('doctor timings',[(Chunk('Synthetic appointment information','https://rxdx.in/'),0.8)])
+    assert '[Source 1]' in result

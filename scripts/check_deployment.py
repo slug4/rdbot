@@ -27,18 +27,20 @@ def call(path, body=None):
 
 def main():
     health = call('/health')
-    assert health.get('application') == 'rxdx-rag', 'Wrong application deployed'
-    assert health.get('status') == 'ok', 'Application is not healthy'
-    print('Production health: ok', flush=True)
+    assert health.get('application') == 'rxdx-rag' and health.get('status') == 'ok', 'Wrong or unhealthy application'
     configured = health.get('generation_configured') is True
     print(f'::notice::Production API key configured: {configured}', flush=True)
-    assert configured, 'Production does not receive OPENAI_API_KEY or RXDX_API_KEY. Configure the key for Production in Vercel and redeploy.'
-    result = call('/api/answer', {'question': 'Does RxDx offer home visits?'})
-    assert result.get('mode') == 'semantic', 'Hosted semantic retrieval or citation validation did not succeed'
-    assert result.get('sources'), 'No supporting official source excerpts returned'
-    assert all(source['url'].startswith(('https://rxdx.in/', 'https://www.rxdx.in/')) for source in result['sources']), 'Unexpected source domain'
-    assert '[Source ' in result.get('answer', ''), 'AI answer is missing source citations'
-    print('Live semantic retrieval and AI answer passed; cited sources:', len(result['sources']), flush=True)
+    questions = call('/api/faqs')['questions']
+    assert len(questions) >= 30, 'Common question list missing'
+    print('::notice::Production question catalog contains 30 suggested questions.',flush=True)
+    assert configured, 'Production API key not configured'
+    for question in ['Does RxDx offer home visits?', 'What are the doctor timings?', 'What tests and diagnostic services are listed?']:
+        result = call('/api/answer', {'question':question})
+        assert result.get('mode') == 'semantic' and result.get('sources'), 'Hosted RAG retrieval failed'
+        assert '[Source ' in result.get('answer', ''), 'AI answer is missing source citations'
+        assert all(source['url'].startswith(('https://rxdx.in/', 'https://www.rxdx.in/')) for source in result['sources']), 'Unexpected source'
+    print('::notice::Live RAG answers and citations passed for home visits, doctor timings and tests.',flush=True)
+
 
 if __name__ == '__main__':
     try:

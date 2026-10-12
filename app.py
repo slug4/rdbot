@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
 from openai import APIStatusError, APIConnectionError, APITimeoutError
 from rag import Chunk, Retriever, answer, load_pages, REFUSAL
+from faq import public_faqs
 
 load_dotenv()
 app = Flask(__name__)
@@ -35,34 +36,32 @@ class HostedEmbeddings:
         return np.asarray([row.embedding for row in sorted(response.data, key=lambda row: row.index)])
 
 
-class KeywordEmbeddings:
-    """Explicit fallback, not semantic embeddings."""
-    def __init__(self, chunks):
-        self.vocabulary = sorted({word for chunk in chunks for word in self.tokens(chunk.text)})
-
-    @staticmethod
-    def tokens(text):
-        stopwords = {'the','and','for','with','does','what','where','when','how','are','can','you','about','that','this','from'}
-        return {word for word in re.findall(r'\w+', text.lower()) if len(word)>2 and word not in stopwords}
-
-    def encode(self, texts):
-        tokens = [self.tokens(text) for text in texts]
-        return np.asarray([[int(word in row) for word in self.vocabulary] for row in tokens], dtype=np.float32)
+class MissingProviderKey(RuntimeError):
+    pass
 
 
 def get_index():
     # Warm-instance cache only. Vercel may discard it between invocations.
-    mode = 'semantic' if configured_key() else 'keyword'
+    if not configured_key():
+        raise MissingProviderKey('Hosted RAG requires a configured API key.')
+    mode = 'semantic'
     with _lock:
         cached = _cache.get(mode)
         if cached and time.monotonic() - cached[0] < 600:
             return cached[1:]
         urls = [line.strip() for line in Path(__file__).with_name('sources.txt').read_text().splitlines() if line.strip() and not line.startswith('#')]
-        chunks, errors = load_pages(urls[:4], timeout=6)
+        chunks, errors = load_pages(urls[:6], timeout=6)
         if not chunks:
             raise RuntimeError('No public source pages could be indexed.')
-        chunks = chunks[:60]
-        model = HostedEmbeddings(configured_key()) if mode == 'semantic' else KeywordEmbeddings(chunks)
+        # Keep source coverage fair instead of letting the first page fill the index.
+        counts, selected = {}, []
+        for chunk in chunks:
+            count = counts.get(chunk.url, 0)
+            if count < 8:
+                selected.append(chunk)
+                counts[chunk.url] = count + 1
+        chunks = selected
+        model = HostedEmbeddings(configured_key())
         index = Retriever(chunks, model=model)
         _cache[mode] = (time.monotonic(), index, errors, mode)
         return index, errors, mode
@@ -70,7 +69,13 @@ def get_index():
 
 @app.get('/')
 def home():
-    return render_template('index.html')
+    questions = public_faqs()
+    return render_template('index.html', faqs=questions, categories=list(dict.fromkeys(row['category'] for row in questions)))
+
+
+@app.get('/api/faqs')
+def faqs():
+    return jsonify(questions=public_faqs())
 
 
 @app.get('/health')
@@ -84,11 +89,11 @@ def query():
     question = body.get('question') if isinstance(body, dict) else None
     if not isinstance(question, str) or not question.strip() or len(question)>2000:
         return jsonify(error='Enter a question of 1–2,000 characters.'), 400
-    if re.search(r'\b(diagnos\w*|prescri\w*|dosage|dose|my symptoms|my chest pain|what medicine|treat my|suicid\w*|overdose)\b', question, re.I):
+    if re.search(r'\b(diagnos(?:e|is|ing|ed)|prescri\w*|dosage|dose|my symptoms|my chest pain|what medicine|treat my|suicid\w*|overdose)\b', question, re.I):
         return jsonify(answer='This assistant cannot provide individual medical advice. Consult a qualified clinician. If you believe this is an emergency, contact local emergency services immediately.', sources=[], mode='safety')
     try:
         index, warnings, mode = get_index()
-        hits = [(chunk,score) for chunk,score in index.search(question) if score >= (0.3 if mode=='semantic' else 0.05)]
+        hits = [(chunk,score) for chunk,score in index.search(question) if score >= 0.3]
         if not hits:
             return jsonify(answer=REFUSAL, sources=[], mode=mode, partial_sources=bool(warnings))
         text = answer(question, hits)
@@ -115,6 +120,8 @@ def query():
         return jsonify(error='The AI provider rejected this request. Check the configured model and account access.', error_code='provider_request'), 503
     except (APIConnectionError, APITimeoutError):
         return jsonify(error='Could not reach the AI provider. Please try again later.', error_code='provider_connection'), 503
+    except MissingProviderKey:
+        return jsonify(error='AI answers require a configured API key and available provider access.', error_code='provider_configuration'), 503
     except RuntimeError:
         return jsonify(error='No approved public website sources could be loaded. The source website may be blocking access or temporarily unavailable.', error_code='source_unavailable'), 503
     except Exception:

@@ -14,9 +14,9 @@ Routes:
 
 Add `OPENAI_API_KEY` in Vercel environment settings to enable hosted `text-embedding-3-small` semantic retrieval and chat generation. `RXDX_API_KEY` is also supported, particularly in Codex cloud where `OPENAI_` variable names are reserved. Optional `OPENAI_MODEL` defaults to `gpt-4.1-mini`; `OPENAI_BASE_URL` must be HTTPS and support both embeddings and chat completions.
 
-**Without a key**, the app uses keyword retrieval and returns source excerpts rather than an AI-generated answer. This fallback is explicitly labelled and is not semantic RAG. With a key, public text chunks and user questions are sent to the provider, which may incur costs.
+Every operational answer goes through semantic retrieval and AI generation. A configured API key and usable provider access are required. There is no prewritten FAQ-answer or keyword-answer fallback. Public text chunks and user questions are sent to the provider, which may incur costs.
 
-The first question fetches approved public pages and checks robots rules. The index is cached for 10 minutes within a warm server instance; Vercel can discard it between requests. Source failures are marked as partial coverage. The index is limited to four configured pages and 60 chunks; this demo does not promise exhaustive clinic coverage. For production, use a scheduled ingestion pipeline and a persistent vector store to avoid request-time indexing and serverless timeouts.
+The first question fetches approved public pages and checks robots rules. The index is cached for 10 minutes within a warm server instance; Vercel can discard it between requests. Source failures are marked as partial coverage. The index is limited to six configured pages and up to eight chunks per page; this demo does not promise exhaustive clinic coverage. For production, use a scheduled ingestion pipeline and a persistent vector store to avoid request-time indexing and serverless timeouts.
 
 ## Develop and test
 
@@ -30,7 +30,7 @@ python -m flask --app app run --host 0.0.0.0 --port 8502
 python -m pytest -q
 ```
 
-The tests cover the actual Flask entry point, UI/static routes, input limits, safety refusals, retrieval fallback, source citations, provider errors, index caching and robots enforcement. They use synthetic sources and mocked providers. Live model generation requires a separately configured API key and is not covered by those mocked tests.
+The tests cover the actual Flask entry point, UI/static routes, input limits, safety refusals, semantic retrieval, source citations, provider errors, index caching and robots enforcement. They use synthetic sources and mocked providers. Live model generation requires a separately configured API key and is not covered by those mocked tests.
 
 ## Optional local Streamlit interface
 
@@ -54,3 +54,11 @@ Before exposing provider-enabled public access, add authentication, durable rate
 ## Project 2
 
 An AI recruitment assistant has been proposed; its implementation is not part of this deployment fix.
+
+## Simple questions and answers
+
+The interface lists 30 questions about doctor timings, doctor lists, appointments, tests, reports, health checks, home care, contacts and branches. `faq.py` contains question suggestions only, with no stored answers. Clicking a suggestion submits the question to the same RAG endpoint as a typed question. Answers use plain language, 1–3 short sentences or at most five bullet points, with source citations. Diagnostic-service questions are permitted; individual diagnosis and treatment requests are refused.
+
+Six approved public source pages cover the doctor directory, centres, contacts, lab/radiology, home care and health packages. Exact doctor timings need a named doctor and branch plus a published matching schedule. Otherwise the bot must say it cannot verify them and ask the clinic to confirm. It must not generalize home-visit hours to all clinic doctors. The question list cannot promise every possible question or complete scheduling data. Add verified source documents for branch-specific coverage.
+
+Run the manual Production smoke check workflow after deployment to verify the catalog and live cited RAG answers. The last observed hosted-provider rate limit remains an external blocker until provider access permits requests; a passing deployment or mocked unit suite alone does not verify generated live answers.
