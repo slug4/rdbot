@@ -1,64 +1,43 @@
-# RxDx RAG Q&A Bot
+# RxDx public-information Q&A
 
-An independent public-information assistant for RxDx Clinics, Bengaluru. Covers clinic locations, services and contacts using approved official public pages. It is not affiliated with RxDx and does not diagnose, prescribe, book appointments or confirm current availability.
+An independent source-grounded assistant for RxDx Clinics, Bengaluru. It retrieves approved public pages using local semantic embeddings and returns short extracts with citations. It is not affiliated with RxDx.
 
-## Vercel web application
+## No external AI key
 
-`app.py` exports the top-level Flask `app` required by Vercel's Python runtime. Import this repository's **main** branch with the repository root as the root directory. Runtime dependencies in `requirements.txt` deliberately exclude Streamlit, Torch and local embedding weights. No custom build command is required. Python is pinned to 3.12.
+The web application requires no OpenAI or other AI-provider key. A bundled, checksum-verified quantized `all-MiniLM-L6-v2` model runs locally with ONNX Runtime. Questions and website text are embedded locally, ranked by cosine similarity, and answered with short extracts from the retrieved evidence.
 
-Routes:
+This is **semantic retrieval with extractive Q&A**, not generative LLM RAG. It does not rewrite arbitrary website passages into new explanations. The short quotes remain source text. Exact doctor timings require verified doctor/branch information; the assistant asks for clarification or clinic confirmation instead of inferring clinic schedules from home-care hours. Individual medical advice is out of scope.
 
-- `/`: browser Q&A interface
-- `/health`: lightweight health/configuration status (no provider calls)
-- `/api/answer`: JSON POST containing `{"question":"Does RxDx offer home visits?"}`
+The interface lists 30 question suggestions. `faq.py` stores questions only; answers are not prewritten FAQ entries. Every operational question searches the source index. The same route handles typed and clicked questions.
 
-Add `OPENAI_API_KEY` in Vercel environment settings to enable hosted `text-embedding-3-small` semantic retrieval and chat generation. `RXDX_API_KEY` is also supported, particularly in Codex cloud where `OPENAI_` variable names are reserved. Optional `OPENAI_MODEL` defaults to `gpt-4.1-mini`; `OPENAI_BASE_URL` must be HTTPS and support both embeddings and chat completions.
+## Run and test
 
-Every operational answer goes through semantic retrieval and AI generation. A configured API key and usable provider access are required. There is no prewritten FAQ-answer or keyword-answer fallback. Public text chunks and user questions are sent to the provider, which may incur costs.
-
-The first question fetches approved public pages and checks robots rules. The index is cached for 10 minutes within a warm server instance; Vercel can discard it between requests. Source failures are marked as partial coverage. The index is limited to six configured pages and up to eight chunks per page; this demo does not promise exhaustive clinic coverage. For production, use a scheduled ingestion pipeline and a persistent vector store to avoid request-time indexing and serverless timeouts.
-
-## Develop and test
+Requires Python 3.12.
 
 ```sh
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements-dev.txt
-cp .env.example .env
-# Configure API credentials securely if desired.
 python -m flask --app app run --host 0.0.0.0 --port 8502
 python -m pytest -q
 ```
 
-The tests cover the actual Flask entry point, UI/static routes, input limits, safety refusals, semantic retrieval, source citations, provider errors, index caching and robots enforcement. They use synthetic sources and mocked providers. Live model generation requires a separately configured API key and is not covered by those mocked tests.
+Routes: `/` for the interface, `/health` for health and keyless architecture status, `/api/faqs` for question suggestions, and JSON POST `/api/answer` with `{"question":"Does RxDx offer home visits?"}`.
 
-## Optional local Streamlit interface
+## Sources, caching and timing
 
-The original interface is preserved in `streamlit_app.py`. It uses local Sentence Transformers and requires the heavier optional dependencies:
+Six approved official HTTPS pages in `sources.txt` cover doctors, branches, contacts, labs/radiology, home care and health packages. Robots checks and TLS verification remain enabled. Redirects are rejected; no portals or patient records are accessed. No full scraped website copies are committed.
 
-```sh
-pip install -r requirements-streamlit.txt
-streamlit run streamlit_app.py
-```
+The first request fetches pages and embeds up to eight chunks per page. The index is cached for 10 minutes within a warm server instance. A new instance or expired cache fetches sources again, so first responses are slower than repeated requests. Vercel can route requests to different instances; a repeat is not guaranteed to hit the same cache. Website access failures are reported and partial coverage is labelled. A scheduled ingestion process and durable index are appropriate for larger workloads.
 
-Streamlit requires a persistent Python server and is not the Vercel entry point. Its local semantic model must be downloaded before use. Do not install the optional Streamlit requirements in the Vercel runtime.
+The local model assets, upstream revision, license and SHA-256 values are under `models/`. They are bundled so requests never download model weights. Do not replace expected checksums or disable verification. The portable AVX2 quantized ONNX export uses the CPU runtime. No Torch or Streamlit is installed in the web runtime.
 
-## Sources and safety
+## Deployment
 
-Approved public HTTPS URLs are listed in `sources.txt`. Fetching rejects redirects and robots denials; it does not access portals or patient records. Review website terms for the intended use. The web application does not accept arbitrary source URLs from users.
+`app.py` exports a top-level Flask `app` for Vercel's Python runtime. Import the repository root on `main`; runtime dependencies are in `requirements.txt`. Run the manual Production smoke check workflow for live retrieval, source citations and question catalog validation. Mocked tests alone do not prove production behavior.
 
-Do not submit patient records or personal medical details. Provider-enabled requests send the question and public excerpts to the provider. Answers can be wrong: check supporting excerpts and confirm clinic details directly with RxDx. Citation validation checks source IDs and formatting, not semantic entailment of every generated claim. The keyword medical guard is a limited precaution, not a clinical safety classifier.
+The optional `streamlit_app.py` interface needs `requirements-streamlit.txt` and a persistent local server; it is not the Vercel entry point.
 
-Before exposing provider-enabled public access, add authentication, durable rate limits, spending controls and appropriate privacy measures. This educational prototype has no such production access controls.
+## Limitations
 
-## Project 2
-
-An AI recruitment assistant has been proposed; its implementation is not part of this deployment fix.
-
-## Simple questions and answers
-
-The interface lists 30 questions about doctor timings, doctor lists, appointments, tests, reports, health checks, home care, contacts and branches. `faq.py` contains question suggestions only, with no stored answers. Clicking a suggestion submits the question to the same RAG endpoint as a typed question. Answers use plain language, 1–3 short sentences or at most five bullet points, with source citations. Diagnostic-service questions are permitted; individual diagnosis and treatment requests are refused.
-
-Six approved public source pages cover the doctor directory, centres, contacts, lab/radiology, home care and health packages. Exact doctor timings need a named doctor and branch plus a published matching schedule. Otherwise the bot must say it cannot verify them and ask the clinic to confirm. It must not generalize home-visit hours to all clinic doctors. The question list cannot promise every possible question or complete scheduling data. Add verified source documents for branch-specific coverage.
-
-Run the manual Production smoke check workflow after deployment to verify the catalog and live cited RAG answers. The last observed hosted-provider rate limit remains an external blocker until provider access permits requests; a passing deployment or mocked unit suite alone does not verify generated live answers.
+This educational prototype may return imperfectly formatted excerpts or miss relevant content. Doctor rosters, test availability, charges and schedules can change; confirm directly with RxDx. The index is limited and does not guarantee answers to every possible question. Do not enter patient details or use it for diagnosis, prescriptions, emergencies or booking confirmation. Public production use needs access controls, request limits and suitable privacy measures.

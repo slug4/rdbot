@@ -7,7 +7,7 @@ async function ask(faqId){
  try{
   const response=await fetch('/api/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:question.value})});
   const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not complete this question.');
-  const label=data.mode==='safety'?'Medical advice requires a clinician':'Answer from RxDx sources';
+  const label=data.mode==='safety'?'Medical advice requires a clinician':'Retrieved RxDx information';
   result.append(element('span',label,'badge'),element('p',data.answer,'answer-text'));
   if(data.partial_sources)result.append(element('p','Some source pages were unavailable. Please confirm details directly with RxDx.','partial'));
   for(const source of data.sources){

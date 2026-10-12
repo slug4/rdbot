@@ -38,17 +38,17 @@ class FakeModel:
 
 def index_fixture():
     chunks=[Chunk('Synthetic clinic contact telephone information.','https://rxdx.in/')]
-    return Retriever(chunks,FakeModel()),[], 'semantic'
+    return Retriever(chunks,FakeModel()),[], 'local_semantic'
 
 
-def test_source_grounded_generated_answer(client,monkeypatch):
+def test_source_grounded_extracted_answer(client,monkeypatch):
     monkeypatch.setenv('RXDX_API_KEY','test-placeholder')
     monkeypatch.setattr(web,'answer',lambda question,hits:'Synthetic clinic contact answer [Source 1].')
     monkeypatch.setattr(web,'get_index',index_fixture)
     response=client.post('/api/answer',json={'question':'clinic contact telephone'})
     assert response.status_code==200
     result=response.json
-    assert result['mode']=='semantic'
+    assert result['mode']=='local_semantic'
     assert result['sources'][0]['url']=='https://rxdx.in/'
     assert '[Source 1]' in result['answer']
 
@@ -79,7 +79,7 @@ def test_generated_bad_citations_fail_closed(client,monkeypatch):
 
 def test_index_cached_only_after_success(monkeypatch):
     monkeypatch.setenv('RXDX_API_KEY','test-placeholder')
-    monkeypatch.setattr(web,'HostedEmbeddings',lambda key:FakeModel())
+    monkeypatch.setattr(web,'get_model',lambda:FakeModel())
     web._cache.clear()
     calls=[]
     def load(*_,**__):
@@ -92,24 +92,9 @@ def test_index_cached_only_after_success(monkeypatch):
     web._cache.clear()
 
 
-@pytest.mark.parametrize('body',[{'code':'insufficient_quota'},{'error':{'code':'insufficient_quota'}},{'error':{'type':'insufficient_quota'}}])
-def test_quota_error_is_actionable_without_leaking_credentials(client,monkeypatch,body):
-    import httpx
-    from openai import RateLimitError
-    request=httpx.Request('POST','https://api.openai.com/v1/embeddings')
-    response=httpx.Response(429,request=request)
-    def fail():
-        raise RateLimitError('confidential provider details',response=response,body=body)
-    monkeypatch.setattr(web,'get_index',fail)
-    result=client.post('/api/answer',json={'question':'clinic services'})
-    assert result.status_code==503
-    assert result.json['error_code']=='insufficient_quota'
-    assert 'confidential' not in result.get_data(as_text=True)
-
-
 def test_missing_sources_error_has_safe_category(client,monkeypatch):
     def fail(): raise RuntimeError('source debug details')
     monkeypatch.setattr(web,'get_index',fail)
     result=client.post('/api/answer',json={'question':'clinic services'})
-    assert result.json['error_code']=='source_unavailable'
+    assert result.json['error_code']=='retrieval_unavailable'
     assert 'debug' not in result.get_data(as_text=True)

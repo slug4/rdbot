@@ -1,54 +1,31 @@
 """Lightweight Flask entry point for Vercel; no Streamlit or Torch at import."""
-import os
 import re
 import threading
 import time
 from pathlib import Path
 
 import numpy as np
-from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
-from openai import APIStatusError, APIConnectionError, APITimeoutError
-from rag import Chunk, Retriever, answer, load_pages, REFUSAL
+from rag import Retriever, answer, load_pages, REFUSAL
 from faq import public_faqs
+from local_model import get_model
 
-load_dotenv()
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 8192
 _cache = {}
 _lock = threading.Lock()
-
-
-def configured_key():
-    return os.getenv('RXDX_API_KEY') or os.getenv('OPENAI_API_KEY')
-
-
-class HostedEmbeddings:
-    def __init__(self, key):
-        from openai import OpenAI
-        base = os.getenv('OPENAI_BASE_URL', 'https://api.openai.com/v1')
-        if not base.startswith('https://'):
-            raise ValueError('AI endpoint must use HTTPS')
-        self.client = OpenAI(api_key=key, base_url=base, timeout=20, max_retries=0)
-
-    def encode(self, texts):
-        response = self.client.embeddings.create(model='text-embedding-3-small', input=texts)
-        return np.asarray([row.embedding for row in sorted(response.data, key=lambda row: row.index)])
-
-
-class MissingProviderKey(RuntimeError):
-    pass
+_request_stats = threading.local()
 
 
 def get_index():
     # Warm-instance cache only. Vercel may discard it between invocations.
-    if not configured_key():
-        raise MissingProviderKey('Hosted RAG requires a configured API key.')
-    mode = 'semantic'
+    mode = 'local_semantic'
     with _lock:
         cached = _cache.get(mode)
         if cached and time.monotonic() - cached[0] < 600:
+            _request_stats.value = {'cache_hit':True, 'index_seconds':0.0}
             return cached[1:]
+        index_start = time.perf_counter()
         urls = [line.strip() for line in Path(__file__).with_name('sources.txt').read_text().splitlines() if line.strip() and not line.startswith('#')]
         chunks, errors = load_pages(urls[:6], timeout=6)
         if not chunks:
@@ -61,9 +38,10 @@ def get_index():
                 selected.append(chunk)
                 counts[chunk.url] = count + 1
         chunks = selected
-        model = HostedEmbeddings(configured_key())
+        model = get_model()
         index = Retriever(chunks, model=model)
         _cache[mode] = (time.monotonic(), index, errors, mode)
+        _request_stats.value = {'cache_hit':False, 'index_seconds':round(time.perf_counter()-index_start,3)}
         return index, errors, mode
 
 
@@ -80,11 +58,13 @@ def faqs():
 
 @app.get('/health')
 def health():
-    return jsonify(status='ok', application='rxdx-rag', generation_configured=bool(configured_key()))
+    return jsonify(status='ok', application='rxdx-rag', requires_api_key=False, retrieval='local_semantic', answer_style='extractive')
 
 
 @app.post('/api/answer')
 def query():
+    started=time.perf_counter()
+    _request_stats.value={}
     body = request.get_json(silent=True)
     question = body.get('question') if isinstance(body, dict) else None
     if not isinstance(question, str) or not question.strip() or len(question)>2000:
@@ -97,36 +77,17 @@ def query():
         if not hits:
             return jsonify(answer=REFUSAL, sources=[], mode=mode, partial_sources=bool(warnings))
         text = answer(question, hits)
-        if configured_key():
+        if hits:
             cited = {int(i) for i in re.findall(r'\[Source (\d+)\]', text)}
             if not cited or any(i<1 or i>len(hits) for i in cited) or re.search(r'https?://',text):
                 text = 'The generated answer did not include valid source citations. Please review the retrieved excerpts.'
-                mode += ' · unverified generation'
-        return jsonify(answer=text, mode=mode, partial_sources=bool(warnings), sources=[{'id':i,'url':chunk.url,'text':chunk.text} for i,(chunk,_) in enumerate(hits,1)])
-    except APIStatusError as exc:
-        # Only known error categories are exposed; never provider bodies or credentials.
-        code = getattr(exc, 'code', None)
-        body = getattr(exc, 'body', None)
-        if isinstance(body, dict):
-            detail = body.get('error', body)
-            if isinstance(detail, dict):
-                code = code or detail.get('code') or detail.get('type')
-        if code == 'insufficient_quota':
-            return jsonify(error='Your AI provider account has no available API credits. Add API billing or credits, then try again.', error_code='insufficient_quota'), 503
-        if exc.status_code == 401:
-            return jsonify(error='The AI provider rejected the API key. Check the production key configuration.', error_code='provider_authentication'), 503
-        if exc.status_code == 429:
-            return jsonify(error='The AI provider rate limit was reached. Please try again later.', error_code='provider_rate_limit'), 503
-        return jsonify(error='The AI provider rejected this request. Check the configured model and account access.', error_code='provider_request'), 503
-    except (APIConnectionError, APITimeoutError):
-        return jsonify(error='Could not reach the AI provider. Please try again later.', error_code='provider_connection'), 503
-    except MissingProviderKey:
-        return jsonify(error='AI answers require a configured API key and available provider access.', error_code='provider_configuration'), 503
+                mode = 'unverified_excerpt'
+        return jsonify(answer=text, mode=mode, partial_sources=bool(warnings), sources=[{'id':i,'url':chunk.url,'text':chunk.text} for i,(chunk,_) in enumerate(hits,1)], timing={**_request_stats.value,'processing_seconds':round(time.perf_counter()-started,3)})
     except RuntimeError:
-        return jsonify(error='No approved public website sources could be loaded. The source website may be blocking access or temporarily unavailable.', error_code='source_unavailable'), 503
+        return jsonify(error='Could not load approved public sources or the verified local model. Please try again later.', error_code='retrieval_unavailable'), 503
     except Exception:
-        app.logger.warning('Retrieval or provider request failed; no answer returned.')
-        return jsonify(error='Unable to retrieve public sources or reach the AI provider. Please try again later.', error_code='request_failed'), 503
+        app.logger.warning('Local retrieval failed; no answer returned.')
+        return jsonify(error='Unable to retrieve public sources or load the local model. Please try again later.', error_code='request_failed'), 503
 
 
 @app.errorhandler(413)

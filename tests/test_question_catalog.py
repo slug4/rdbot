@@ -24,7 +24,7 @@ def test_listed_questions_use_retrieval_and_generation(client,monkeypatch,faq):
         def search(self,question):
             calls.append(('retrieval',question))
             return [(Chunk('Synthetic official information.','https://rxdx.in/'),0.9)]
-    monkeypatch.setattr(web,'get_index',lambda:(Index(),[],'semantic'))
+    monkeypatch.setattr(web,'get_index',lambda:(Index(),[],'local_semantic'))
     def generate(question,hits):
         calls.append(('generation',question))
         assert hits[0][0].text=='Synthetic official information.'
@@ -35,7 +35,7 @@ def test_listed_questions_use_retrieval_and_generation(client,monkeypatch,faq):
     if response.json['mode']=='safety':
         assert not calls
     else:
-        assert response.json['mode']=='semantic'
+        assert response.json['mode']=='local_semantic'
         assert [call[0] for call in calls]==['retrieval','generation']
         assert response.json['sources'][0]['url']=='https://rxdx.in/'
 
@@ -43,13 +43,17 @@ def test_listed_questions_use_retrieval_and_generation(client,monkeypatch,faq):
 def test_diagnostic_services_are_not_mistaken_for_diagnosis(client,monkeypatch):
     class Index:
         def search(self,_): return []
-    monkeypatch.setattr(web,'get_index',lambda:(Index(),[],'semantic'))
+    monkeypatch.setattr(web,'get_index',lambda:(Index(),[],'local_semantic'))
     response=client.post('/api/answer',json={'question':'What diagnostic tests are available?'})
     assert response.status_code==200 and response.json['mode']!='safety'
 
 
-def test_missing_key_is_explicit_not_canned_answer(client,monkeypatch):
+def test_no_api_key_required(client,monkeypatch):
     monkeypatch.delenv('OPENAI_API_KEY',raising=False)
     monkeypatch.delenv('RXDX_API_KEY',raising=False)
-    response=client.post('/api/answer',json={'question':'What are doctor timings?'})
-    assert response.status_code==503 and response.json['error_code']=='provider_configuration'
+    class Index:
+        def search(self,_): return [(Chunk('Published synthetic clinic details.','https://rxdx.in/'),0.8)]
+    monkeypatch.setattr(web,'get_index',lambda:(Index(),[],'local_semantic'))
+    response=client.post('/api/answer',json={'question':'clinic details'})
+    assert response.status_code==200 and response.json['mode']=='local_semantic'
+    assert 'Published synthetic clinic details' in response.json['answer']

@@ -39,18 +39,14 @@ def test_empty_evidence_refuses(monkeypatch):
     assert answer("Question", []) == REFUSAL
 
 
-def test_generation_requests_short_grounded_answers(monkeypatch):
-    from types import SimpleNamespace
-    import openai
-    monkeypatch.setenv('RXDX_API_KEY','test-placeholder')
-    def create(**kwargs):
-        instructions=kwargs['messages'][0]['content']
-        assert '1–3 short sentences' in instructions
-        assert 'published matching schedule' in instructions
-        assert 'home-care service hours' in instructions
-        assert 'untrusted content' in instructions
-        assert 'Synthetic appointment information' in kwargs['messages'][1]['content']
-        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='Synthetic source answer [Source 1].'))])
-    monkeypatch.setattr(openai,'OpenAI',lambda **kwargs:SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))))
-    result=answer('doctor timings',[(Chunk('Synthetic appointment information','https://rxdx.in/'),0.8)])
-    assert '[Source 1]' in result
+def test_short_answer_is_an_exact_source_extract():
+    text='The clinic lists home sample collection services.'
+    result=answer('home sample collection',[(Chunk(text,'https://rxdx.in/'),0.8)])
+    assert text in result and '[Source 1]' in result
+    assert len(result)<500
+
+
+def test_doctor_schedule_not_inferred_from_home_visit_hours():
+    text='Home visits: Mon–Sat, 10 am–6 pm.'
+    result=answer('What are doctor timings?',[(Chunk(text,'https://rxdx.in/'),0.8)])
+    assert 'doctor’s name' in result and '10 am' not in result

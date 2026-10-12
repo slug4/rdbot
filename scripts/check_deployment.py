@@ -20,7 +20,7 @@ def call(path, body=None):
             code = body.get('error_code')
         except (ValueError, AttributeError):
             code = None
-        known = {'insufficient_quota','provider_authentication','provider_rate_limit','provider_request','provider_connection','source_unavailable','request_failed'}
+        known = {'insufficient_quota','provider_authentication','provider_rate_limit','provider_request','provider_connection','source_unavailable','request_failed','retrieval_unavailable'}
         safe_code = code if code in known else 'unclassified'
         raise RuntimeError(f'Production API returned HTTP {exc.code}, error category: {safe_code}') from None
 
@@ -28,16 +28,15 @@ def call(path, body=None):
 def main():
     health = call('/health')
     assert health.get('application') == 'rxdx-rag' and health.get('status') == 'ok', 'Wrong or unhealthy application'
-    configured = health.get('generation_configured') is True
-    print(f'::notice::Production API key configured: {configured}', flush=True)
+    assert health.get('requires_api_key') is False, 'Production still depends on an AI key'
+    print('::notice::Production uses local semantic retrieval without an API key.',flush=True)
     questions = call('/api/faqs')['questions']
     assert len(questions) >= 30, 'Common question list missing'
     print('::notice::Production question catalog contains 30 suggested questions.',flush=True)
-    assert configured, 'Production API key not configured'
     for question in ['Does RxDx offer home visits?', 'What are the doctor timings?', 'What tests and diagnostic services are listed?']:
         result = call('/api/answer', {'question':question})
-        assert result.get('mode') == 'semantic' and result.get('sources'), 'Hosted RAG retrieval failed'
-        assert '[Source ' in result.get('answer', ''), 'AI answer is missing source citations'
+        assert result.get('mode') == 'local_semantic' and result.get('sources'), 'Local semantic retrieval failed'
+        assert '[Source ' in result.get('answer', ''), 'Source-based answer is missing citations'
         assert all(source['url'].startswith(('https://rxdx.in/', 'https://www.rxdx.in/')) for source in result['sources']), 'Unexpected source'
     print('::notice::Live RAG answers and citations passed for home visits, doctor timings and tests.',flush=True)
 
