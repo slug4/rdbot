@@ -1,57 +1,56 @@
 # RxDx RAG Q&A Bot
 
-A source-grounded Q&A assistant for **public information about RxDx Clinics, Bengaluru**. Built with Streamlit, sentence-transformer embeddings, and a configurable OpenAI-compatible chat model.
+An independent public-information assistant for RxDx Clinics, Bengaluru. Covers clinic locations, services and contacts using approved official public pages. It is not affiliated with RxDx and does not diagnose, prescribe, book appointments or confirm current availability.
 
-**Scope:** clinic locations, services, appointments, contacts and other information published on the RxDx website. **Not** a diagnostic or patient-record chatbot; not affiliated with RxDx.
+## Vercel web application
 
-## Architecture
+`app.py` exports the top-level Flask `app` required by Vercel's Python runtime. Import this repository's **main** branch with the repository root as the root directory. Runtime dependencies in `requirements.txt` deliberately exclude Streamlit, Torch and local embedding weights. No custom build command is required. Python is pinned to 3.12.
 
-Official RxDx pages -> fetch/clean -> text chunks -> local embeddings -> cosine retrieval -> cited context -> chat-model answer -> source links.
+Routes:
 
-- Embeddings: `sentence-transformers/all-MiniLM-L6-v2` (runs locally, downloaded once)
-- Generation: OpenAI-compatible chat API (set `OPENAI_API_KEY`; choose supported `OPENAI_MODEL`)
-- UI: Streamlit
-- Sources: `sources.txt` (allowlisted rxdx.in HTTPS URLs)
-- No patient data or secrets are stored in Git.
+- `/`: browser Q&A interface
+- `/health`: lightweight health/configuration status (no provider calls)
+- `/api/answer`: JSON POST containing `{"question":"Does RxDx offer home visits?"}`
 
-## Run locally
+Add `OPENAI_API_KEY` in Vercel environment settings to enable hosted `text-embedding-3-small` semantic retrieval and chat generation. `RXDX_API_KEY` is also supported, particularly in Codex cloud where `OPENAI_` variable names are reserved. Optional `OPENAI_MODEL` defaults to `gpt-4.1-mini`; `OPENAI_BASE_URL` must be HTTPS and support both embeddings and chat completions.
 
-```bash
-git clone https://github.com/slug4/rdbot.git
-cd rdbot
+**Without a key**, the app uses keyword retrieval and returns source excerpts rather than an AI-generated answer. This fallback is explicitly labelled and is not semantic RAG. With a key, public text chunks and user questions are sent to the provider, which may incur costs.
+
+The first question fetches approved public pages and checks robots rules. The index is cached for 10 minutes within a warm server instance; Vercel can discard it between requests. Source failures are marked as partial coverage. The index is limited to four configured pages and 60 chunks; this demo does not promise exhaustive clinic coverage. For production, use a scheduled ingestion pipeline and a persistent vector store to avoid request-time indexing and serverless timeouts.
+
+## Develop and test
+
+```sh
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+. .venv/bin/activate
+pip install -r requirements-dev.txt
 cp .env.example .env
-# edit .env and set OPENAI_API_KEY / OPENAI_MODEL
-streamlit run app.py
-```
-
-On first run, click **Refresh knowledge base**, then ask a question. The initial model download needs internet. If you don't configure a chat API, the app shows retrieved excerpts and links rather than fabricating an answer.
-
-## Example questions
-
-- Where is the RxDx Whitefield clinic?
-- Does RxDx offer home visits?
-- How do I contact RxDx?
-- What kinds of diagnostic services are listed?
-
-## Safety and limitations
-
-- Uses only public RxDx website pages; don't ingest patient records, protected portals or personal data.
-- Information may change; confirm availability, doctor schedules, costs and booking status directly with RxDx.
-- Do not use this bot for diagnosis, emergency advice, prescriptions, or individualized treatment.
-- External chat providers receive the user's question and selected public website passages when enabled.
-- Respect the website's robots rules/terms and avoid high-frequency crawling. Refresh manually, not continuously.
-- Answers should cite page URLs; when sources do not support an answer, the bot must say it cannot verify it.
-- This is an educational prototype, not an official RxDx service.
-
-## Development
-
-```bash
+# Configure API credentials securely if desired.
+python -m flask --app app run --host 0.0.0.0 --port 8502
 python -m pytest -q
 ```
 
-## Next
+The tests cover the actual Flask entry point, UI/static routes, input limits, safety refusals, retrieval fallback, source citations, provider errors, index caching and robots enforcement. They use synthetic sources and mocked providers. Live model generation requires a separately configured API key and is not covered by those mocked tests.
 
-Add approved FAQs or PDFs, retrieval quality evaluation, monitoring and a controlled deployment. Keep medical and booking claims source-grounded.
+## Optional local Streamlit interface
+
+The original interface is preserved in `streamlit_app.py`. It uses local Sentence Transformers and requires the heavier optional dependencies:
+
+```sh
+pip install -r requirements-streamlit.txt
+streamlit run streamlit_app.py
+```
+
+Streamlit requires a persistent Python server and is not the Vercel entry point. Its local semantic model must be downloaded before use. Do not install the optional Streamlit requirements in the Vercel runtime.
+
+## Sources and safety
+
+Approved public HTTPS URLs are listed in `sources.txt`. Fetching rejects redirects and robots denials; it does not access portals or patient records. Review website terms for the intended use. The web application does not accept arbitrary source URLs from users.
+
+Do not submit patient records or personal medical details. Provider-enabled requests send the question and public excerpts to the provider. Answers can be wrong: check supporting excerpts and confirm clinic details directly with RxDx. Citation validation checks source IDs and formatting, not semantic entailment of every generated claim. The keyword medical guard is a limited precaution, not a clinical safety classifier.
+
+Before exposing provider-enabled public access, add authentication, durable rate limits, spending controls and appropriate privacy measures. This educational prototype has no such production access controls.
+
+## Project 2
+
+An AI recruitment assistant has been proposed; its implementation is not part of this deployment fix.

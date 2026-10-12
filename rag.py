@@ -5,6 +5,8 @@ import os
 import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
+from urllib.robotparser import RobotFileParser
+import time
 
 import numpy as np
 import requests
@@ -22,8 +24,11 @@ class Chunk:
 
 
 def validate_url(url: str) -> bool:
-    parsed = urlparse(url)
-    return parsed.scheme == "https" and parsed.hostname in ALLOWED_HOSTS and not parsed.username and not parsed.password and parsed.port is None
+    try:
+        parsed = urlparse(url)
+        return parsed.scheme == "https" and parsed.hostname in ALLOWED_HOSTS and not parsed.username and not parsed.password and parsed.port in {None, 443}
+    except ValueError:
+        return False
 
 
 def extract_text(html: str) -> str:
@@ -58,12 +63,29 @@ def chunk_text(text: str, size: int = 850, overlap: int = 140) -> list[str]:
 
 def load_pages(urls: list[str], timeout: int = 12) -> tuple[list[Chunk], list[str]]:
     chunks, errors = [], []
+    robots = {}
     for url in dict.fromkeys(urls):
         url = url.strip()
         if not validate_url(url):
             errors.append(f"Skipped unapproved URL: {url}")
             continue
         try:
+            origin = f"https://{urlparse(url).netloc}"
+            if origin not in robots:
+                rules = requests.get(origin + '/robots.txt', headers=HEADERS, timeout=timeout, allow_redirects=False)
+                rules.raise_for_status()
+                if rules.status_code != 200 or '<html' in rules.text.lower() or '<!doctype' in rules.text.lower():
+                    raise ValueError('Could not verify robots rules')
+                robot = RobotFileParser()
+                robot.parse(rules.text.splitlines())
+                robots[origin] = robot
+            robot = robots[origin]
+            if not robot.can_fetch(HEADERS['User-Agent'], url):
+                raise ValueError('Fetching is disallowed by robots.txt')
+            delay = robot.crawl_delay(HEADERS['User-Agent']) or 1
+            if delay > 10:
+                raise ValueError('Use a scheduled indexer for the required crawl delay')
+            time.sleep(delay)
             response = requests.get(url, headers=HEADERS, timeout=timeout, allow_redirects=False)
             response.raise_for_status()
             if 300 <= response.status_code < 400:
@@ -71,6 +93,8 @@ def load_pages(urls: list[str], timeout: int = 12) -> tuple[list[Chunk], list[st
             content_type = response.headers.get("content-type", "")
             if "text/html" not in content_type:
                 raise ValueError("Page is not HTML")
+            if len(response.content) > 2_000_000:
+                raise ValueError("Page exceeds 2 MB limit")
             text = extract_text(response.text)
             if len(text) < 80:
                 raise ValueError("Not enough readable page text")
@@ -107,11 +131,14 @@ class Retriever:
 def answer(question: str, hits: list[tuple[Chunk, float]]) -> str:
     if not hits:
         return REFUSAL
-    if not os.getenv("OPENAI_API_KEY"):
+    key = os.getenv("RXDX_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not key:
         return "No generation API configured. Review the retrieved excerpts below and their source links."
     from openai import OpenAI
-    kwargs = {"api_key": os.environ["OPENAI_API_KEY"]}
+    kwargs = {"api_key": key, "timeout": 20, "max_retries": 0}
     if os.getenv("OPENAI_BASE_URL"):
+        if not os.environ["OPENAI_BASE_URL"].startswith("https://"):
+            raise ValueError("AI endpoint must use HTTPS")
         kwargs["base_url"] = os.environ["OPENAI_BASE_URL"]
     client = OpenAI(**kwargs)
     passages = "\n\n".join(
@@ -128,6 +155,7 @@ def answer(question: str, hits: list[tuple[Chunk, float]]) -> str:
     completion = client.chat.completions.create(
         model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
         temperature=0,
+        max_tokens=800,
         messages=[
             {"role": "system", "content": instructions},
             {"role": "user", "content": f"Question: {question}\n\nPublic source passages:\n{passages}"},
