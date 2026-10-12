@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
+from openai import APIStatusError, APIConnectionError, APITimeoutError
 from rag import Chunk, Retriever, answer, load_pages, REFUSAL
 
 load_dotenv()
@@ -97,9 +98,23 @@ def query():
                 text = 'The generated answer did not include valid source citations. Please review the retrieved excerpts.'
                 mode += ' · unverified generation'
         return jsonify(answer=text, mode=mode, partial_sources=bool(warnings), sources=[{'id':i,'url':chunk.url,'text':chunk.text} for i,(chunk,_) in enumerate(hits,1)])
+    except APIStatusError as exc:
+        # Only known error categories are exposed; never provider bodies or credentials.
+        code = getattr(exc, 'code', None)
+        if code == 'insufficient_quota':
+            return jsonify(error='Your AI provider account has no available API credits. Add API billing or credits, then try again.', error_code='insufficient_quota'), 503
+        if exc.status_code == 401:
+            return jsonify(error='The AI provider rejected the API key. Check the production key configuration.', error_code='provider_authentication'), 503
+        if exc.status_code == 429:
+            return jsonify(error='The AI provider rate limit was reached. Please try again later.', error_code='provider_rate_limit'), 503
+        return jsonify(error='The AI provider rejected this request. Check the configured model and account access.', error_code='provider_request'), 503
+    except (APIConnectionError, APITimeoutError):
+        return jsonify(error='Could not reach the AI provider. Please try again later.', error_code='provider_connection'), 503
+    except RuntimeError:
+        return jsonify(error='No approved public website sources could be loaded. The source website may be blocking access or temporarily unavailable.', error_code='source_unavailable'), 503
     except Exception:
         app.logger.warning('Retrieval or provider request failed; no answer returned.')
-        return jsonify(error='Unable to retrieve public sources or reach the AI provider. Please try again later.'), 503
+        return jsonify(error='Unable to retrieve public sources or reach the AI provider. Please try again later.', error_code='request_failed'), 503
 
 
 @app.errorhandler(413)

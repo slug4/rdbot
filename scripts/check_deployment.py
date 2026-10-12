@@ -1,6 +1,7 @@
 """Check the known production deployment without reading or logging credentials."""
 import json
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 
 BASE = 'https://rdbot-gamma.vercel.app'
 
@@ -8,10 +9,20 @@ BASE = 'https://rdbot-gamma.vercel.app'
 def call(path, body=None):
     payload = json.dumps(body).encode() if body else None
     request = Request(BASE + path, data=payload, headers={'Content-Type': 'application/json', 'User-Agent': 'RxDx-Deployment-Smoke/1.0'})
-    with urlopen(request, timeout=120) as response:
-        if response.status != 200:
-            raise RuntimeError(f'Unexpected HTTP status: {response.status}')
-        return json.load(response)
+    try:
+        with urlopen(request, timeout=120) as response:
+            if response.status != 200:
+                raise RuntimeError(f'Unexpected HTTP status: {response.status}')
+            return json.load(response)
+    except HTTPError as exc:
+        try:
+            body = json.load(exc)
+            code = body.get('error_code')
+        except (ValueError, AttributeError):
+            code = None
+        known = {'insufficient_quota','provider_authentication','provider_rate_limit','provider_request','provider_connection','source_unavailable','request_failed'}
+        safe_code = code if code in known else 'unclassified'
+        raise RuntimeError(f'Production API returned HTTP {exc.code}, error category: {safe_code}') from None
 
 
 def main():

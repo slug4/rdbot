@@ -85,3 +85,25 @@ def test_index_cached_only_after_success(monkeypatch):
     second=web.get_index()
     assert first[0] is second[0] and len(calls)==1
     web._cache.clear()
+
+
+def test_quota_error_is_actionable_without_leaking_credentials(client,monkeypatch):
+    import httpx
+    from openai import RateLimitError
+    request=httpx.Request('POST','https://api.openai.com/v1/embeddings')
+    response=httpx.Response(429,request=request)
+    def fail():
+        raise RateLimitError('confidential provider details',response=response,body={'code':'insufficient_quota'})
+    monkeypatch.setattr(web,'get_index',fail)
+    result=client.post('/api/answer',json={'question':'clinic services'})
+    assert result.status_code==503
+    assert result.json['error_code']=='insufficient_quota'
+    assert 'confidential' not in result.get_data(as_text=True)
+
+
+def test_missing_sources_error_has_safe_category(client,monkeypatch):
+    def fail(): raise RuntimeError('source debug details')
+    monkeypatch.setattr(web,'get_index',fail)
+    result=client.post('/api/answer',json={'question':'clinic services'})
+    assert result.json['error_code']=='source_unavailable'
+    assert 'debug' not in result.get_data(as_text=True)
